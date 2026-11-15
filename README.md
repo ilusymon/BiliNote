@@ -74,7 +74,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 - 支持笔记风格选择
 - 支持多模态视频理解
 - 支持多版本记录保留
-- 支持自行配置 GPT 大模型（OpenAI、DeepSeek、Qwen 等）
+- 支持自行配置 GPT 大模型（OpenAI、DeepSeek、Qwen、本地 CLI 等）
 - 本地模型音频转写（支持 Fast-Whisper、MLX-Whisper、Groq、BCut）
 - GPT 大模型总结视频内容
 - 自动生成结构化 Markdown 笔记
@@ -242,6 +242,8 @@ docker logs -f bilinote-backend
 - 其他后端变量（`TRANSCRIBER_TYPE`、`WHISPER_MODEL_SIZE`、`FFMPEG_BIN_PATH` 等）是**运行时**变量，改完 `docker-compose up -d` 即可。
 
 注意：**LLM API key 不要写 `.env`**，从前端「模型供应商」页面录入，会保存到 SQLite 数据库并持久化。
+
+使用本地 CLI 供应商前，先设置 `LOCAL_CLI_ENABLED=true` 并重启后端；随后在「模型供应商」中选择「本地 CLI」，界面会自动列出后端机器上的 Codex、Claude 或 Gemini CLI，选择后手工添加模型。Docker 部署时，CLI 必须安装在后端容器内，而不是只装在宿主机上。
 
 **3. 数据存在哪？删容器会丢吗？**
 

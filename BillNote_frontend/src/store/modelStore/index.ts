@@ -5,7 +5,7 @@ import {
   addModel,
   fetchEnableModels,
   fetchEnableModelById,
-  deleteModelById
+  deleteModelById,
 } from '@/services/model'
 
 interface IModel {
@@ -40,7 +40,7 @@ interface ModelStore {
 }
 
 export const useModelStore = create<ModelStore>()(
-  devtools((set) => ({
+  devtools(set => ({
     models: [],
     modelList: [],
     loading: false,
@@ -98,30 +98,20 @@ export const useModelStore = create<ModelStore>()(
 
     //  新增模型逻辑
     addNewModel: async (providerId: string, modelId: string) => {
-      try {
-        const res = await addModel({ provider_id: providerId, model_name: modelId })
-
-        if (res.code === 0) {
-          console.log('新增模型成功:', modelId)
-          set((state) => ({
-            models: [
-              ...state.models,
-              {
-                id: modelId,
-                created: Date.now(),
-                object: 'model',
-                owned_by: '',
-                permission: '',
-                root: '',
-              },
-            ],
-          }))
-        } else {
-          console.error('新增模型失败', res.msg)
-        }
-      } catch (error) {
-        console.error('添加模型出错', error)
-      }
+      await addModel({ provider_id: providerId, model_name: modelId })
+      set(state => ({
+        models: [
+          ...state.models.filter(model => model.id !== modelId),
+          {
+            id: modelId,
+            created: Date.now(),
+            object: 'model',
+            owned_by: '',
+            permission: '',
+            root: '',
+          },
+        ],
+      }))
     },
 
     //  删除模型
@@ -129,8 +119,8 @@ export const useModelStore = create<ModelStore>()(
       try {
         await deleteModelById(modelId)
         //  删除后更新本地状态（可选）
-        set((state) => ({
-          models: state.models.filter((model) => model.id !== modelId.toString())
+        set(state => ({
+          models: state.models.filter(model => model.id !== modelId.toString()),
         }))
       } catch (error) {
         console.error('删除模型失败', error)

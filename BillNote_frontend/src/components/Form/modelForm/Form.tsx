@@ -1,337 +1,331 @@
-import { useForm } from 'react-hook-form'
-import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import toast from 'react-hot-toast'
+import { useNavigate, useParams } from 'react-router-dom'
+import { z } from 'zod'
+
+import { ModelSelector } from '@/components/Form/modelForm/ModelSelector'
+import { Button } from '@/components/ui/button'
 import {
   Form,
+  FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
-  FormControl,
   FormMessage,
-  FormDescription,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import { useParams, useNavigate } from 'react-router-dom'
-import { useProviderStore } from '@/store/providerStore'
-import { useEffect, useState } from 'react'
-import toast from 'react-hot-toast'
-import { testConnection, fetchModels, deleteModelById } from '@/services/model.ts'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select.tsx' // ⚡新增 fetchModels
-import { ModelSelector } from '@/components/Form/modelForm/ModelSelector.tsx'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert.tsx'
-import { Tags } from 'lucide-react'
-import { X } from 'lucide-react'
+} from '@/components/ui/select'
+import { deleteModelById, getLocalCliList, testConnection } from '@/services/model'
 import { useModelStore } from '@/store/modelStore'
+import { useProviderStore } from '@/store/providerStore'
 
-// ✅ Provider表单schema
-const ProviderSchema = z.object({
-  name: z.string().min(2, '名称不能少于 2 个字符'),
-  apiKey: z.string().optional(),
-  baseUrl: z.string().url('必须是合法 URL'),
-  type: z.string(),
-})
+const ProviderSchema = z
+  .object({
+    name: z.string().min(2, '名称不能少于 2 个字符'),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().min(1, '此项不能为空'),
+    type: z.enum(['built-in', 'custom', 'cli']),
+  })
+  .superRefine((values, context) => {
+    if (values.type === 'cli') return
+    try {
+      const url = new URL(values.baseUrl)
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error()
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '必须是合法的 HTTP(S) URL',
+        path: ['baseUrl'],
+      })
+    }
+  })
 
 type ProviderFormValues = z.infer<typeof ProviderSchema>
+type SavedModel = { id: number; model_name: string }
 
-// ✅ Model表单schema
-const ModelSchema = z.object({
-  modelName: z.string().min(1, '请选择或填写模型名称'),
-})
-
-type ModelFormValues = z.infer<typeof ModelSchema>
-interface IModel {
-  id: string
-  created: number
-  object: string
-  owned_by: string
-  permission: string
-  root: string
+const TYPE_LABELS: Record<ProviderFormValues['type'], string> = {
+  'built-in': '内置供应商',
+  custom: 'OpenAI 兼容 API',
+  cli: '本地 CLI',
 }
-const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
-  let { id } = useParams()
-  const navigate = useNavigate()
-  const isEditMode = !isCreate
 
-  const getProviderById = useProviderStore(state => state.getProviderById)
+const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
+  const { id } = useParams()
+  const navigate = useNavigate()
   const loadProviderById = useProviderStore(state => state.loadProviderById)
   const updateProvider = useProviderStore(state => state.updateProvider)
   const addNewProvider = useProviderStore(state => state.addNewProvider)
+  const loadModelsById = useModelStore(state => state.loadModelsById)
   const [loading, setLoading] = useState(true)
   const [testing, setTesting] = useState(false)
-  const [isBuiltIn, setIsBuiltIn] = useState(false)
-  const loadModelsById= useModelStore(state => state.loadModelsById)
-  const [modelOptions, setModelOptions] = useState<IModel[]>([]) // ⚡新增，保存模型列表
-  const [models, setModels]= useState([])
-  const [modelLoading, setModelLoading] = useState(false)
-  const randomColor = ()=>{
-    return '#' + Math.floor(Math.random() * 16777215).toString(16)
-  }
+  const [models, setModels] = useState<SavedModel[]>([])
+  const [localClis, setLocalClis] = useState<{ id: string; name: string }[]>([])
 
-  const [search, setSearch] = useState('')
   const providerForm = useForm<ProviderFormValues>({
     resolver: zodResolver(ProviderSchema),
-    defaultValues: {
-      name: '',
-      apiKey: '',
-      baseUrl: '',
-      type: 'custom',
-    },
+    defaultValues: { name: '', apiKey: '', baseUrl: '', type: 'custom' },
   })
-  const filteredModelOptions = modelOptions.filter(model => {
-    const keywords = search.trim().toLowerCase().split(/\s+/) // 支持多个关键词
-    const target = model.id.toLowerCase()
-    return keywords.every(kw => target.includes(kw))
-  })
-
-  const modelForm = useForm<ModelFormValues>({
-    resolver: zodResolver(ModelSchema),
-    defaultValues: {
-      modelName: '',
-    },
-  })
+  const providerType = providerForm.watch('type')
+  const isBuiltIn = providerType === 'built-in'
+  const isCli = providerType === 'cli'
 
   useEffect(() => {
+    if (!isCli) return
+    getLocalCliList().then(items => {
+      setLocalClis(items)
+      if (!id) {
+        providerForm.setValue('baseUrl', items[0]?.id ?? '', { shouldDirty: true })
+      }
+    })
+  }, [id, isCli, providerForm])
 
+  const refreshModels = async (providerId = id) => {
+    if (!providerId) return
+    setModels(await loadModelsById(providerId))
+  }
+
+  useEffect(() => {
     const load = async () => {
-      if (isEditMode) {
-
-        const data = await loadProviderById(id!)
-        providerForm.reset(data)
-        setIsBuiltIn(data.type === 'built-in')
-      } else {
-        providerForm.reset({
-          name: '',
-          apiKey: '',
-          baseUrl: '',
-          type: 'custom',
-        })
-        setIsBuiltIn(false)
+      try {
+        if (!isCreate && id) {
+          const provider = await loadProviderById(id)
+          providerForm.reset(provider)
+          setModels(await loadModelsById(id))
+        }
+      } finally {
+        setLoading(false)
       }
-      const models = await loadModelsById(id!)
-      if(models){
-        console.log('🔧 模型列表:', models)
-        setModels(models)
-
-      }
-      setLoading(false)
     }
     load()
-  }, [id])
-  const handelDelete=async (modelId)=>{
+  }, [id, isCreate, loadModelsById, loadProviderById, providerForm])
+
+  const handleDelete = async (modelId: number) => {
     if (!window.confirm('确定要删除这个模型吗？')) return
-
     try {
-      const res = await deleteModelById(modelId)
-      console.log('🔧 删除结果:', res)
-
+      await deleteModelById(modelId)
+      await refreshModels()
       toast.success('删除成功')
-
-    } catch (e) {
+    } catch {
       toast.error('删除异常')
     }
   }
-  // 测试连通性
+
   const handleTest = async () => {
     const values = providerForm.getValues()
-    if (!values.apiKey || !values.baseUrl) {
-      toast.error('请填写 API Key 和 Base URL')
+    if (!id) {
+      toast.error('请先保存供应商信息并添加模型')
+      return
+    }
+    if (providerForm.formState.isDirty) {
+      toast.error('请先保存当前修改')
+      return
+    }
+    if (!values.baseUrl || (!isCli && !values.apiKey)) {
+      toast.error(isCli ? '请选择本地 CLI' : '请填写 API Key 和 API 地址')
       return
     }
     try {
-      if (!id){
-        toast.error('请先保存供应商信息')
-        return
-      }
       setTesting(true)
-     await testConnection({
-             id
-          })
-
-        toast.success('测试连通性成功 🎉')
-
+      await testConnection({ id }, { silent: true })
+      toast.success('测试连通性成功 🎉')
     } catch (error) {
-
-      toast.error(`连接失败: ${data.data.msg || '未知错误'}`)
-      // toast.error('测试连通性异常')
+      const message =
+        typeof error === 'object' && error && 'msg' in error ? String(error.msg) : '未知错误'
+      toast.error(`连接失败: ${message}`)
     } finally {
       setTesting(false)
     }
   }
 
-  // 加载模型列表
-  const handleModelLoad = async () => {
-    const values = providerForm.getValues()
-    if (!values.apiKey || !values.baseUrl) {
-      toast.error('请先填写 API Key 和 Base URL')
+  const onProviderSubmit = async (values: ProviderFormValues) => {
+    if (id) {
+      await updateProvider({ ...values, id })
+      providerForm.reset(values)
+      toast.success('更新供应商成功')
       return
     }
-    try {
-      setModelLoading(true) // ✅ 开始 loading
-      const res = await fetchModels(id!, { noCache: true }) // 这里稍后解释
-      if (res.data.code === 0 && res.data.data.models.data.length > 0) {
-        setModelOptions(res.data.data.models.data)
-        console.log('🔧 模型列表:', res.data.data)
-        toast.success('模型列表加载成功 🎉')
-      } else {
-        toast.error('未获取到模型列表')
-      }
-    } catch (error) {
-      toast.error('加载模型列表失败')
-    } finally {
-      setModelLoading(false) // ✅ 结束 loading
-    }
-  }
 
-  // 保存Provider信息
-  const onProviderSubmit = async (values: ProviderFormValues) => {
-    if (isEditMode) {
-      await updateProvider({ ...values, id: id! })
-      toast.success('更新供应商成功')
-    } else {
-       id = await addNewProvider({ ...values })
-
-      toast.success('新增供应商成功')
-    }
-    // 刷新页面
-
-  }
-
-  // 保存Model信息
-  const onModelSubmit = async (values: ModelFormValues) => {
-    toast.success(`保存模型: ${values.modelName}`)
-    await loadModelsById(id!)
+    const providerId = await addNewProvider(values)
+    toast.success('新增供应商成功')
+    navigate(`/settings/model/${providerId}`)
   }
 
   if (loading) return <div className="p-4">加载中...</div>
 
   return (
     <div className="flex flex-col gap-8 p-4">
-      {/* Provider信息表单 */}
       <Form {...providerForm}>
         <form
           onSubmit={providerForm.handleSubmit(onProviderSubmit)}
-          className="flex max-w-xl flex-col gap-4"
+          className="flex max-w-2xl flex-col gap-4"
         >
-          <div className="text-lg font-bold">
-            {isEditMode ? '编辑模型供应商' : '新增模型供应商'}
-          </div>
-          {!isBuiltIn && (
-            <div className="text-sm text-red-500 italic">
-              自定义模型供应商需要确保兼容 OpenAI SDK
+          <div className="text-lg font-bold">{id ? '编辑模型供应商' : '新增模型供应商'}</div>
+
+          {isCli ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              自动检测后端所在机器已安装的 CLI。当前仅支持文本输入。
             </div>
-          )}
+          ) : !isBuiltIn ? (
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              自定义模型供应商需要兼容 OpenAI API。
+            </div>
+          ) : null}
+
           <FormField
             control={providerForm.control}
             name="name"
             render={({ field }) => (
-              <FormItem className="flex items-center gap-4">
-                <FormLabel className="w-24 text-right">名称</FormLabel>
+              <FormItem className="grid grid-cols-1 gap-2 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-center sm:gap-4">
+                <FormLabel className="sm:text-right">名称</FormLabel>
                 <FormControl>
-                  <Input {...field} disabled={isBuiltIn} className="flex-1" />
+                  <Input {...field} disabled={isBuiltIn} />
                 </FormControl>
-                <FormMessage />
+                <FormMessage className="sm:col-start-2" />
               </FormItem>
             )}
           />
-          <FormField
-            control={providerForm.control}
-            name="apiKey"
-            render={({ field }) => (
-              <FormItem className="flex items-center gap-4">
-                <FormLabel className="w-24 text-right">API Key</FormLabel>
-                <FormControl>
-                  <Input {...field} className="flex-1" />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={providerForm.control}
-            name="baseUrl"
-            render={({ field }) => (
-              <FormItem className="flex items-center gap-4">
-                <FormLabel className="w-24 text-right">API地址</FormLabel>
-                <FormControl>
-                  <Input {...field} className="flex-1" />
-                </FormControl>
-                <Button type="button" onClick={handleTest} variant="ghost" disabled={testing}>
-                  {testing ? '测试中...' : '测试连通性'}
-                </Button>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+
           <FormField
             control={providerForm.control}
             name="type"
             render={({ field }) => (
-              <FormItem className="flex items-center gap-4">
-                <FormLabel className="w-24 text-right">类型</FormLabel>
-                <FormControl>
-                  <Input {...field} disabled className="flex-1" />
-                </FormControl>
-                <FormMessage />
+              <FormItem className="grid grid-cols-1 gap-2 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-center sm:gap-4">
+                <FormLabel className="sm:text-right">类型</FormLabel>
+                {id ? (
+                  <Input value={TYPE_LABELS[field.value]} disabled />
+                ) : (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="custom">OpenAI 兼容 API</SelectItem>
+                      <SelectItem value="cli">本地 CLI</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+                <FormMessage className="sm:col-start-2" />
               </FormItem>
             )}
           />
-          <div className="pt-2">
-            <Button type="submit" disabled={!providerForm.formState.isDirty}>
-              {isEditMode ? '保存修改' : '保存创建'}
+
+          {!isCli && (
+            <FormField
+              control={providerForm.control}
+              name="apiKey"
+              render={({ field }) => (
+                <FormItem className="grid grid-cols-1 gap-2 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-center sm:gap-4">
+                  <FormLabel className="sm:text-right">API Key</FormLabel>
+                  <FormControl>
+                    <Input {...field} type="password" autoComplete="off" />
+                  </FormControl>
+                  <FormMessage className="sm:col-start-2" />
+                </FormItem>
+              )}
+            />
+          )}
+
+          <FormField
+            control={providerForm.control}
+            name="baseUrl"
+            render={({ field }) => (
+              <FormItem className="grid grid-cols-1 gap-2 sm:grid-cols-[6rem_minmax(0,1fr)_auto] sm:items-center sm:gap-4">
+                <FormLabel className="sm:text-right">{isCli ? '本地 CLI' : 'API 地址'}</FormLabel>
+                {isCli ? (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="未检测到可用 CLI" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {field.value && !localClis.some(cli => cli.id === field.value) && (
+                        <SelectItem value={field.value}>旧版自定义命令</SelectItem>
+                      )}
+                      {localClis.map(cli => (
+                        <SelectItem key={cli.id} value={cli.id}>
+                          {cli.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <FormControl>
+                    <Input {...field} placeholder="https://api.example.com/v1" />
+                  </FormControl>
+                )}
+                <Button type="button" onClick={handleTest} variant="outline" disabled={testing}>
+                  {testing ? '测试中...' : '测试连通性'}
+                </Button>
+                {isCli && (
+                  <FormDescription className="sm:col-span-2 sm:col-start-2">
+                    需先设置 LOCAL_CLI_ENABLED=true；CLI 应已安装并完成登录。
+                  </FormDescription>
+                )}
+                <FormMessage className="sm:col-span-2 sm:col-start-2" />
+              </FormItem>
+            )}
+          />
+
+          <div className="pt-2 sm:pl-28">
+            <Button
+              type="submit"
+              disabled={!providerForm.formState.isDirty || providerForm.formState.isSubmitting}
+            >
+              {id ? '保存修改' : '保存创建'}
             </Button>
           </div>
         </form>
       </Form>
 
-      {/* 模型信息表单 */}
-      <div className="flex max-w-xl flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <span className="font-bold">模型列表</span>
-          <div className={'flex flex-col gap-2 rounded bg-[#FEF0F0] p-2.5'}>
-            <h2 className={'font-bold'}>注意!</h2>
-            <span>请确保已经保存供应商信息,以及通过测试连通性.</span>
+      <div className="flex max-w-2xl flex-col gap-4">
+        <div className="font-bold">模型列表</div>
+        {!id ? (
+          <div className="bg-muted/40 text-muted-foreground rounded-md border p-3 text-sm">
+            保存供应商后即可添加模型并测试连通性。
           </div>
-          <ModelSelector providerId={id!} />
-
-          {/*<datalist id="model-options">*/}
-          {/*  {modelOptions.map(model => (*/}
-          {/*    <option key={model.id + '1'} value={model.id} />*/}
-          {/*  ))}*/}
-          {/*</datalist>*/}
-        </div>
-        <div className="flex flex-col gap-2">
-          <span className="font-bold">已启用模型</span>
-          <div className={'flex flex-wrap gap-2 rounded  p-2.5'}>
-            {
-              models && models.map(model => {
-                return (
-                  <span key={model.id} className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-0.5 text-sm text-blue-700">
-                    {model.model_name}
-                    <button type="button" onClick={() => handelDelete(model.id)} className="hover:text-blue-900">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-
-                )
-              })
-            }
-
-          </div>
-          {/*<ModelSelector providerId={id!} />*/}
-
-          {/*<datalist id="model-options">*/}
-          {/*  {modelOptions.map(model => (*/}
-          {/*    <option key={model.id + '1'} value={model.id} />*/}
-          {/*  ))}*/}
-          {/*</datalist>*/}
-        </div>
+        ) : (
+          <>
+            <ModelSelector providerId={id} manual={isCli} onAdded={() => refreshModels(id)} />
+            <div className="flex flex-col gap-2">
+              <span className="font-bold">已启用模型</span>
+              <div className="flex min-h-9 flex-wrap gap-2 rounded p-2.5">
+                {models.length === 0 ? (
+                  <span className="text-muted-foreground text-sm">尚未添加模型</span>
+                ) : (
+                  models.map(model => (
+                    <span
+                      key={model.id}
+                      className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-0.5 text-sm text-blue-700"
+                    >
+                      {model.model_name}
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(model.id)}
+                        className="rounded hover:text-blue-900 focus-visible:outline focus-visible:outline-2"
+                        aria-label={`删除模型 ${model.model_name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

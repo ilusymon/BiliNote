@@ -3,12 +3,18 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.exceptions.provider import ProviderError
+from app.gpt.local_cli_client import LocalCLIClient
 from app.models.model_config import ModelConfig
 from app.services.model import ModelService
 from app.utils.response import ResponseWrapper as R
 from app.services.provider import ProviderService
 
 router = APIRouter()
+
+
+@router.get("/local_cli_list")
+def local_cli_list():
+    return R.success(LocalCLIClient.detect_available())
 
 #  新增 type 字段
 class ProviderRequest(BaseModel):

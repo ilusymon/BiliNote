@@ -1,4 +1,5 @@
 import * as Icons from '@lobehub/icons'
+import { Terminal } from 'lucide-react'
 import CustomLogo from '@/assets/customAI.png'
 
 interface AILogoProps {
@@ -8,6 +9,9 @@ interface AILogoProps {
 }
 
 const AILogo = ({ name, style = 'Color', size = 24 }: AILogoProps) => {
+  if (name === 'cli') {
+    return <Terminal size={size} aria-label="Local CLI" />
+  }
   const Icon = name ? Icons[name as keyof typeof Icons] : undefined
   if (!Icon) {
     if (name && name !== 'custom') {

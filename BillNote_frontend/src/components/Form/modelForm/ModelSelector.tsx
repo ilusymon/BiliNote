@@ -13,9 +13,11 @@ import toast from 'react-hot-toast'
 
 interface ModelSelectorProps {
   providerId: string
+  manual?: boolean
+  onAdded?: () => void | Promise<void>
 }
 
-export function ModelSelector({ providerId }: ModelSelectorProps) {
+export function ModelSelector({ providerId, manual = false, onAdded }: ModelSelectorProps) {
   const { models, loading, selectedModel, loadModels, setSelectedModel, addNewModel } =
     useModelStore()
   const [search, setSearch] = useState('')
@@ -28,10 +30,10 @@ export function ModelSelector({ providerId }: ModelSelectorProps) {
   })
 
   useEffect(() => {
-    if (providerId) {
+    if (providerId && !manual) {
       loadModels(providerId)
     }
-  }, [providerId])
+  }, [providerId, manual, loadModels])
 
   const handleSubmit = async () => {
     if (!selectedModel) {
@@ -41,8 +43,10 @@ export function ModelSelector({ providerId }: ModelSelectorProps) {
     try {
       setSubmitting(true)
       await addNewModel(providerId, selectedModel)
+      await onAdded?.()
+      setSelectedModel('')
       toast.success('保存模型成功 🎉')
-    } catch (error) {
+    } catch {
       toast.error('保存失败')
     } finally {
       setSubmitting(false)
@@ -52,37 +56,48 @@ export function ModelSelector({ providerId }: ModelSelectorProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2 font-bold">
-        <span>选择模型</span>
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={() => loadModels(providerId)}
-          disabled={loading}
-        >
-          {loading ? '加载中...' : '刷新模型'}
-        </Button>
+        <span>{manual ? '添加模型' : '选择模型'}</span>
+        {!manual && (
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => loadModels(providerId)}
+            disabled={loading}
+          >
+            {loading ? '加载中...' : '刷新模型'}
+          </Button>
+        )}
       </div>
 
-      <Select value={selectedModel} onValueChange={setSelectedModel}>
-        <SelectTrigger className="w-[300px]">
-          <SelectValue placeholder="请选择模型" />
-        </SelectTrigger>
-        <SelectContent>
-          <div className="p-2">
-            <Input
-              placeholder="搜索模型..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="h-8"
-            />
-          </div>
-          {filteredModels.map((model, index) => (
-            <SelectItem key={`${model.id}-${index}`} value={model.id}>
-              {model.id}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {manual ? (
+        <Input
+          value={selectedModel}
+          onChange={event => setSelectedModel(event.target.value)}
+          placeholder="输入模型名，例如 gpt-5.2-codex"
+          className="max-w-sm"
+        />
+      ) : (
+        <Select value={selectedModel} onValueChange={setSelectedModel}>
+          <SelectTrigger className="w-[300px] max-w-full">
+            <SelectValue placeholder="请选择模型" />
+          </SelectTrigger>
+          <SelectContent>
+            <div className="p-2">
+              <Input
+                placeholder="搜索模型..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="h-8"
+              />
+            </div>
+            {filteredModels.map((model, index) => (
+              <SelectItem key={`${model.id}-${index}`} value={model.id}>
+                {model.id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       <Button onClick={handleSubmit} disabled={submitting || !selectedModel}>
         {submitting ? '保存中...' : '保存模型'}

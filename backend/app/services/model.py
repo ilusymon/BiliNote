@@ -5,7 +5,6 @@ from app.db.provider_dao import get_enabled_providers
 from app.enmus.exception import ProviderErrorEnum
 from app.exceptions.provider import ProviderError
 from app.gpt.gpt_factory import GPTFactory
-from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 from app.models.model_config import ModelConfig
 from app.services.provider import ProviderService
 from app.utils.logger import get_logger
@@ -18,7 +17,7 @@ class ModelService:
         return ModelConfig(
             api_key=provider["api_key"],
             base_url=provider["base_url"],
-            provider=provider["name"],
+            provider=provider["type"],
             model_name='',
             name=provider["name"],
         )
@@ -108,6 +107,13 @@ class ModelService:
             logger.warning(f"[{provider_id}] 供应商不存在")
             return {"models": []}
 
+        if provider.get("type") == "cli":
+            from app.services.model_fallback import as_model_dicts
+
+            saved_models = ModelService.get_enabled_models_by_provider(provider_id)
+            names = [item["model_name"] for item in saved_models]
+            return {"models": as_model_dicts(names, owned_by=provider.get("name", ""))}
+
         models: list = []
         error: str | None = None
         try:
@@ -148,7 +154,7 @@ class ModelService:
                 code=ProviderErrorEnum.NOT_FOUND.code,
                 message=ProviderErrorEnum.NOT_FOUND.message,
             )
-        if not provider.get('api_key'):
+        if provider.get("type") != "cli" and not provider.get('api_key'):
             raise ProviderError(
                 code=ProviderErrorEnum.NOT_FOUND.code,
                 message=ProviderErrorEnum.NOT_FOUND.message,
@@ -163,12 +169,25 @@ class ModelService:
                 )
             model = saved_models[0]["model_name"]
 
-        ok = OpenAICompatibleProvider.test_connection(
-            api_key=provider.get('api_key'),
-            base_url=provider.get('base_url'),
-            model=model,
+        config = ModelConfig(
+            api_key=provider.get("api_key", ""),
+            base_url=provider.get("base_url", ""),
+            provider=provider["type"],
+            model_name=model,
+            name=provider["name"],
         )
-        if ok:
+        try:
+            gpt = GPTFactory.from_config(config)
+            response = gpt.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "请只回复 OK"}],
+            )
+        except Exception as exc:
+            raise ProviderError(
+                code=ProviderErrorEnum.WRONG_PARAMETER.code,
+                message=str(exc),
+            ) from exc
+        if response.choices[0].message.content:
             return True
         raise ProviderError(
             code=ProviderErrorEnum.WRONG_PARAMETER.code,
